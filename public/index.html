@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Mario Tennis 64 Online // Netplay P2P</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <div id="viewport-wrapper" class="viewport-wrapper">
+    <!-- BARRA FLOTANTE SUPERIOR -->
+    <header class="floating-hud-bar">
+      <div class="hud-left">
+        <div class="game-badge">🎾 MARIO TENNIS 64</div>
+        <div class="room-code-chip" id="room-code-display">SALA: ...</div>
+      </div>
+
+      <!-- ESTADO RÁPIDO DE LOS 4 JUGADORES (1P A 4P) -->
+      <div class="players-status-group" aria-label="Estado de Jugadores 1P a 4P">
+        <div id="slot-1p" class="player-slot-pill slot-p1">
+          <span class="dot"></span>
+          <span class="slot-label">1P</span>
+        </div>
+        <div id="slot-2p" class="player-slot-pill slot-p2">
+          <span class="dot"></span>
+          <span class="slot-label">2P</span>
+        </div>
+        <div id="slot-3p" class="player-slot-pill slot-p3">
+          <span class="dot"></span>
+          <span class="slot-label">3P</span>
+        </div>
+        <div id="slot-4p" class="player-slot-pill slot-p4">
+          <span class="dot"></span>
+          <span class="slot-label">4P</span>
+        </div>
+      </div>
+
+      <!-- ACCIONES RÁPIDAS -->
+      <div class="hud-right">
+        <button id="open-keymap-btn" class="hud-btn btn-keymap" title="Configurar las teclas del teclado o mando">
+          ⚙️ Configurar Teclas
+        </button>
+        <button id="copy-invite-btn" class="hud-btn btn-invite">
+          📋 Copiar Link de Invitación
+        </button>
+        <button id="toggle-sidebar-btn" class="hud-btn btn-icon" title="Mostrar/Ocultar Panel de Jugadores">
+          👥
+        </button>
+        <button id="fullscreen-btn" class="hud-btn btn-icon" title="Pantalla Completa">
+          ⛶
+        </button>
+      </div>
+    </header>
+
+    <!-- LAYOUT PRINCIPAL: JUEGO A LA IZQUIERDA + PERSONAS CONECTADAS AL COSTADO DERECHO -->
+    <div class="main-workspace">
+      <!-- LIENZO DEL JUEGO -->
+      <main class="game-stage">
+        <!-- Contenedor de EmulatorJS (Activo en el navegador del Host 1P) -->
+        <div id="emulator-container" class="emulator-container">
+          <div id="game"></div>
+        </div>
+
+        <!-- Vista en Tiempo Real para los Invitados (2P, 3P y 4P) -->
+        <div id="guest-stage" class="guest-stage hidden">
+          <video id="guest-video-stream" class="guest-video" autoplay playsinline muted></video>
+          <img id="guest-fallback-img" class="guest-fallback-img hidden" alt="Stream de Mario Tennis 64" />
+
+          <div class="guest-floating-controls">
+            <span id="guest-stream-badge" class="stream-badge">📡 Conectando con 1P (Host)...</span>
+            <button id="unmute-guest-btn" class="hud-btn btn-invite">🔊 Activar Audio del Juego</button>
+            <button id="resync-stream-btn" class="hud-btn btn-icon" title="Reconectar Video">🔄</button>
+          </div>
+        </div>
+
+        <!-- Modal limpio si falta mario_tennis.z64 en /rom/ -->
+        <div id="rom-missing-modal" class="rom-overlay hidden">
+          <div class="rom-card">
+            <h2>🎾 Cargar ROM <code>mario_tennis.z64</code></h2>
+            <p>
+              Coloca tu archivo <code>mario_tennis.z64</code> en la carpeta <code>/rom/</code> del proyecto
+              o selecciónalo aquí una sola vez:
+            </p>
+            <input id="rom-file-picker" type="file" accept=".z64,.n64,.v64,.zip" class="hidden" />
+            <button id="select-rom-btn" class="btn-upload-rom">
+              📂 Seleccionar mario_tennis.z64
+            </button>
+          </div>
+        </div>
+      </main>
+
+      <!-- PANEL LATERAL DERECHO: PERSONAS CONECTADAS Y NOMBRES -->
+      <aside id="players-sidebar" class="players-sidebar">
+        <!-- 1. PONER TU NOMBRE -->
+        <div class="sidebar-section">
+          <label class="section-label" for="player-name-input">👤 TU NOMBRE EN LA SALA</label>
+          <form id="name-form" class="name-form">
+            <input
+              id="player-name-input"
+              type="text"
+              maxlength="18"
+              placeholder="Escribe tu nombre..."
+              autocomplete="off"
+            />
+            <button type="submit" class="btn-save-name">Guardar</button>
+          </form>
+        </div>
+
+        <!-- 2. LISTA EN VIVO DE PERSONAS CONECTADAS (1P A 4P) -->
+        <div class="sidebar-section">
+          <div class="section-header-row">
+            <span class="section-label">🎮 PERSONAS CONECTADAS (1P - 4P)</span>
+            <span id="connected-count-badge" class="count-badge">1/4</span>
+          </div>
+
+          <div id="connected-players-list" class="connected-players-list"></div>
+        </div>
+
+        <!-- 3. LINK PARA COMPARTIR -->
+        <div class="sidebar-section">
+          <label class="section-label">🔗 LINK PARA INVITAR AMIGOS</label>
+          <div class="share-box">
+            <input id="share-url-input" type="text" readonly />
+            <button id="sidebar-copy-btn" class="btn-copy-small">Copiar</button>
+          </div>
+          <small id="network-hint-text" class="network-hint">
+            Quien entre a este link se conectará automáticamente como 2P, 3P o 4P.
+          </small>
+        </div>
+
+        <!-- 4. CHAT Y REGISTRO DE CONEXIÓN EN TIEMPO REAL -->
+        <div class="sidebar-section chat-section">
+          <span class="section-label">💬 CHAT DE SALA</span>
+          <div id="chat-messages" class="chat-messages"></div>
+          <form id="chat-form" class="chat-form">
+            <input id="chat-input" type="text" maxlength="120" placeholder="Escribe a la sala..." autocomplete="off" />
+            <button type="submit" class="btn-send-chat">➤</button>
+          </form>
+        </div>
+      </aside>
+    </div>
+
+    <!-- MODAL PARA CONFIGURAR LAS TECLAS (PERSONALIZABLE POR JUGADOR) -->
+    <div id="keymap-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+      <div class="keymap-card">
+        <div class="keymap-header">
+          <div>
+            <h2>⚙️ Configurar Teclas de Mario Tennis 64</h2>
+            <p>Haz clic en cualquier acción y presiona la tecla que quieras usar. Se guarda automáticamente.</p>
+          </div>
+          <button id="close-keymap-btn" class="btn-close-modal">✕</button>
+        </div>
+
+        <div id="keymap-grid" class="keymap-grid">
+          <!-- Generado dinámicamente por app.js -->
+        </div>
+
+        <div class="keymap-footer">
+          <button id="reset-keymap-btn" class="btn-secondary-modal">🔄 Restaurar Teclas por Defecto</button>
+          <button id="done-keymap-btn" class="btn-primary-modal">✅ Guardar y Volver al Juego</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONTROLES TÁCTILES EN PANTALLA (PARA MÓVILES Y TABLETS) -->
+    <div id="touch-controls" class="touch-controls hidden" aria-hidden="true">
+      <div id="touch-joystick-zone" class="touch-joystick-zone">
+        <div id="touch-joystick-base" class="touch-joystick-base">
+          <div id="touch-joystick-stick" class="touch-joystick-stick"></div>
+        </div>
+      </div>
+
+      <div class="touch-center-bar">
+        <button class="touch-pill-btn" data-btn="START">START</button>
+      </div>
+
+      <div class="touch-actions-zone">
+        <button class="touch-action-btn btn-lob" data-btn="LOB">GLOBO</button>
+        <button class="touch-action-btn btn-drop" data-btn="DROP">DEJADA</button>
+        <button class="touch-action-btn btn-b" data-btn="B">B (SLICE)</button>
+        <button class="touch-action-btn btn-a" data-btn="A">A (LIFT)</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

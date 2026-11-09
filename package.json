@@ -1,0 +1,21 @@
+{
+  "name": "mario-tennis-n64-online",
+  "version": "1.0.0",
+  "description": "Aplicación web minimalista estilo olivers.tools para jugar Mario Tennis (Nintendo 64) online hasta 4 jugadores con EmulatorJS (WebAssembly) y WebRTC P2P.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
