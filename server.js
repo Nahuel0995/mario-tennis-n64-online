@@ -9,7 +9,7 @@ const { Server } = require('socket.io');
 const app = express();
 app.use(cors());
 
-// Cabeceras COOP/COEP para habilitar SharedArrayBuffer en WebAssembly (Mupen64Plus-Next)
+// Cabeceras COOP/COEP para WebAssembly de alta velocidad
 app.use((req, res, next) => {
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
@@ -24,7 +24,6 @@ if (!fs.existsSync(romDir)) {
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/rom', express.static(romDir));
 
-// Detectar IP de red local (LAN) para que el link compartido no use "localhost" cuando se envía a otra PC/celular
 function getLocalNetworkIPs() {
   const nets = os.networkInterfaces();
   const ips = [];
@@ -38,27 +37,108 @@ function getLocalNetworkIPs() {
   return ips;
 }
 
+function formatGameTitleFromFilename(filename) {
+  const base = path.basename(filename, path.extname(filename));
+  const clean = base
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!clean) return 'Juego N64';
+  return clean.toUpperCase();
+}
+
+function listAvailableRoms() {
+  try {
+    const validExts = new Set(['.z64', '.n64', '.v64', '.zip']);
+    const files = fs.readdirSync(romDir);
+    return files
+      .filter((f) => validExts.has(path.extname(f).toLowerCase()))
+      .map((f) => {
+        const stat = fs.statSync(path.join(romDir, f));
+        return {
+          filename: f,
+          title: formatGameTitleFromFilename(f),
+          url: `/rom/${encodeURIComponent(f)}`,
+          sizeMB: Number((stat.size / (1024 * 1024)).toFixed(1))
+        };
+      });
+  } catch (_) {
+    return [];
+  }
+}
+
 app.get('/api/rom-status', (req, res) => {
-  const romPath = path.join(romDir, 'mario_tennis.z64');
-  const exists = fs.existsSync(romPath);
+  const roms = listAvailableRoms();
+  const defaultRom = roms.find((r) => r.filename.toLowerCase() === 'mario_tennis.z64') || roms[0] || null;
   const PORT = process.env.PORT || 3000;
   const lanIps = getLocalNetworkIPs();
   res.json({
-    exists,
-    url: '/rom/mario_tennis.z64',
+    exists: Boolean(defaultRom),
+    url: defaultRom ? defaultRom.url : '/rom/mario_tennis.z64',
+    title: defaultRom ? defaultRom.title : 'MARIO TENNIS 64',
+    roms,
     lanUrl: lanIps.length > 0 ? `http://${lanIps[0]}:${PORT}` : null
   });
 });
 
+app.get('/api/roms', (req, res) => {
+  res.json({
+    ok: true,
+    roms: listAvailableRoms()
+  });
+});
+
+// Subir cualquier ROM de Nintendo 64 (.z64, .n64, .v64, .zip) y opcionalmente cambiar el juego de la sala
 app.post('/api/upload-rom', (req, res) => {
-  const targetPath = path.join(romDir, 'mario_tennis.z64');
+  const rawName = String(req.query.name || req.headers['x-rom-name'] || 'mario_tennis.z64').trim();
+  const roomId = String(req.query.room || req.headers['x-room-id'] || '').trim().toLowerCase();
+  const ext = path.extname(rawName).toLowerCase();
+  const validExts = new Set(['.z64', '.n64', '.v64', '.zip']);
+  const safeExt = validExts.has(ext) ? ext : '.z64';
+
+  const baseName = path
+    .basename(rawName, ext || undefined)
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .substring(0, 48) || 'juego_n64';
+
+  const finalFilename = `${baseName}${safeExt}`;
+  const targetPath = path.join(romDir, finalFilename);
   const writeStream = fs.createWriteStream(targetPath);
 
   req.pipe(writeStream);
 
   writeStream.on('finish', () => {
-    io.emit('rom-ready', { url: '/rom/mario_tennis.z64' });
-    res.status(200).json({ ok: true, url: '/rom/mario_tennis.z64' });
+    const romUrl = `/rom/${encodeURIComponent(finalFilename)}`;
+    const gameTitle = formatGameTitleFromFilename(finalFilename);
+    const roms = listAvailableRoms();
+
+    if (roomId && rooms.has(roomId)) {
+      const room = rooms.get(roomId);
+      room.currentGame = {
+        title: gameTitle,
+        url: romUrl,
+        filename: finalFilename,
+        core: room.currentGame?.core || 'parallel_n64'
+      };
+      io.to(roomId).emit('room-game-changed', {
+        game: room.currentGame,
+        roms
+      });
+      io.to(roomId).emit('system-message', {
+        text: `🎮 Nueva ROM cargada en la sala: ${gameTitle}`
+      });
+    } else {
+      io.emit('rom-ready', { url: romUrl, title: gameTitle, roms });
+    }
+
+    res.status(200).json({
+      ok: true,
+      filename: finalFilename,
+      title: gameTitle,
+      url: romUrl,
+      roms
+    });
   });
 
   writeStream.on('error', (err) => {
@@ -73,29 +153,23 @@ const io = new Server(server, {
     origin: '*',
     methods: ['GET', 'POST']
   },
+  pingInterval: 10000,
+  pingTimeout: 20000,
+  perMessageDeflate: false,
   maxHttpBufferSize: 1e7
 });
 
-/**
- * Gestión de Salas en Memoria
- * Map<roomId, {
- *   id: string,
- *   hostSocketId: string,
- *   players: Map<socketId, {
- *     socketId: string,
- *     name: string,
- *     slot: number,
- *     controllerType: string,
- *     ping: number
- *   }>
- * }>
- */
 const rooms = new Map();
 
 function serializeRoom(room) {
   return {
     id: room.id,
     hostSocketId: room.hostSocketId,
+    currentGame: room.currentGame || {
+      title: 'MARIO TENNIS 64',
+      url: '/rom/mario_tennis.z64',
+      core: 'parallel_n64'
+    },
     players: Array.from(room.players.values()).sort((a, b) => a.slot - b.slot)
   };
 }
@@ -107,7 +181,6 @@ io.on('connection', (socket) => {
     if (typeof ack === 'function') ack(clientTime);
   });
 
-  // Unirse o inicializar automáticamente una sala (?room=abc12345)
   socket.on('join-room', ({ roomId, name, controllerType }, ack) => {
     const cleanRoomId = String(roomId || '')
       .trim()
@@ -123,12 +196,19 @@ io.on('connection', (socket) => {
 
     let room = rooms.get(cleanRoomId);
 
-    // Si la sala no existe, el primer usuario en entrar la inicializa como Host (1P / slot 0)
     if (!room) {
       const playerName = String(name || 'Jugador 1').trim().substring(0, 18) || 'Jugador 1';
+      const roms = listAvailableRoms();
+      const defaultRom = roms.find((r) => r.filename.toLowerCase() === 'mario_tennis.z64') || roms[0];
+
       room = {
         id: cleanRoomId,
         hostSocketId: socket.id,
+        currentGame: {
+          title: defaultRom ? defaultRom.title : 'MARIO TENNIS 64',
+          url: defaultRom ? defaultRom.url : '/rom/mario_tennis.z64',
+          core: 'parallel_n64'
+        },
         players: new Map()
       };
       room.players.set(socket.id, {
@@ -153,7 +233,8 @@ io.on('connection', (socket) => {
           slot: 0,
           isHost: true,
           hostSocketId: socket.id,
-          room: serialized
+          room: serialized,
+          roms
         });
       }
       return;
@@ -166,7 +247,6 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Buscar el primer puerto disponible (0 = 1P, 1 = 2P, 2 = 3P, 3 = 4P)
     const occupiedSlots = new Set(Array.from(room.players.values()).map((p) => p.slot));
     let assignedSlot = 0;
     while (occupiedSlots.has(assignedSlot) && assignedSlot < 4) {
@@ -189,9 +269,8 @@ io.on('connection', (socket) => {
     const serialized = serializeRoom(room);
     io.to(cleanRoomId).emit('room-state', serialized);
 
-    // Avisar a toda la sala y pedir al Host (1P) que inicie el stream hacia este nuevo jugador
     io.to(cleanRoomId).emit('system-message', {
-      text: `🎾 ${playerName} se conectó como ${assignedSlot + 1}P.`
+      text: `🎮 ${playerName} se conectó como ${assignedSlot + 1}P.`
     });
 
     if (room.hostSocketId !== socket.id) {
@@ -211,12 +290,38 @@ io.on('connection', (socket) => {
         slot: assignedSlot,
         isHost: room.hostSocketId === socket.id,
         hostSocketId: room.hostSocketId,
-        room: serialized
+        room: serialized,
+        roms: listAvailableRoms()
       });
     }
   });
 
-  // Actualizar nombre, tipo de control o ping en tiempo real
+  // Cambiar de juego o núcleo N64 dentro de la misma sala sin desconectar a los amigos
+  socket.on('change-room-game', ({ roomId, title, url, core, isLocalBlob }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    const cleanTitle = String(title || 'JUEGO N64').trim().substring(0, 40).toUpperCase();
+    const cleanCore = core === 'n64' ? 'n64' : 'parallel_n64';
+
+    room.currentGame = {
+      title: cleanTitle,
+      url: isLocalBlob ? room.currentGame?.url : (url || room.currentGame?.url || '/rom/mario_tennis.z64'),
+      core: cleanCore
+    };
+
+    io.to(roomId).emit('room-state', serializeRoom(room));
+    io.to(roomId).emit('room-game-metadata', {
+      title: cleanTitle,
+      core: cleanCore,
+      url: isLocalBlob ? null : url,
+      changedBySocketId: socket.id
+    });
+    io.to(roomId).emit('system-message', {
+      text: `🕹️ ${player ? player.name : 'Host'} cambió el juego a: ${cleanTitle}`
+    });
+  });
+
   socket.on('update-player-meta', ({ name, controllerType, ping }) => {
     for (const [roomId, room] of rooms.entries()) {
       if (room.players.has(socket.id)) {
@@ -231,7 +336,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Solicitar reconexión de video WebRTC al Host
   socket.on('request-stream-sync', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (room && room.hostSocketId && room.players.has(socket.id)) {
@@ -244,7 +348,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Señalización WebRTC P2P
   socket.on('webrtc-signal', ({ targetSocketId, signal }) => {
     io.to(targetSocketId).emit('webrtc-signal', {
       senderSocketId: socket.id,
@@ -252,7 +355,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Transmisión de inputs de los mandos 2P, 3P y 4P hacia el Host (1P)
   socket.on('input-fallback', ({ roomId, slot, state }) => {
     const room = rooms.get(roomId);
     if (room && room.hostSocketId) {
@@ -263,12 +365,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Retransmisión de frames de respaldo por si WebRTC P2P tarda o es bloqueado por firewall
-  socket.on('video-frame-fallback', ({ roomId, frameDataUrl }) => {
-    socket.to(roomId).volatile.emit('video-frame-fallback', frameDataUrl);
-  });
-
-  // Mensajes de chat entre los jugadores conectados
   socket.on('chat-message', ({ roomId, text }) => {
     const room = rooms.get(roomId);
     if (!room || !room.players.has(socket.id)) return;
@@ -304,7 +400,8 @@ function leaveCurrentRooms(socket) {
           room.hostSocketId = nextHost.socketId;
           nextHost.slot = 0;
           io.to(roomId).emit('host-promoted', {
-            newHostSocketId: room.hostSocketId
+            newHostSocketId: room.hostSocketId,
+            currentGame: room.currentGame
           });
         }
 
@@ -326,7 +423,7 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
   const lanIps = getLocalNetworkIPs();
   console.log(`\n======================================================`);
-  console.log(` 🎾 MARIO TENNIS 64 ONLINE // SERVIDOR MULTIJUGADOR`);
+  console.log(` 🎮 N64 ONLINE ARENA // SERVIDOR MULTIJUGADOR P2P`);
   console.log(` 🖥️  Local:      http://localhost:${PORT}`);
   if (lanIps.length > 0) {
     console.log(` 🌐 Red / LAN:  http://${lanIps[0]}:${PORT}`);

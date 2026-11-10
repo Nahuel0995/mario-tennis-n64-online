@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>N64 Wasm Core Runner</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000000;
+      user-select: none;
+    }
+    #game {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    /* Ocultar barras y menús complejos internos de EmulatorJS */
+    .ejs_menu_bar,
+    .ejs_context_menu,
+    .ejs_netplay_menu,
+    .ejs_settings_parent,
+    .ejs_virtual_gamepad_parent {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+
+  <script>
+    (() => {
+      // Reenviar teclas al manejador principal del padre en fase de captura
+      // para evitar que SDL/EmulatorJS encoleten eventos duplicados
+      window.addEventListener('keydown', (e) => {
+        if (window.parent && typeof window.parent.__handleEmulatorKeyDown === 'function') {
+          window.parent.__handleEmulatorKeyDown(e);
+        }
+      }, true);
+
+      window.addEventListener('keyup', (e) => {
+        if (window.parent && typeof window.parent.__handleEmulatorKeyUp === 'function') {
+          window.parent.__handleEmulatorKeyUp(e);
+        }
+      }, true);
+
+      // Mantener AudioContext activo sin parchar AudioNode.prototype.connect
+      // (evita la fuga de AudioBufferSourceNodes que tildaba el juego tras unos minutos)
+      const NativeAudioCtx = window.AudioContext || window.webkitAudioContext;
+      const activeContexts = [];
+      if (NativeAudioCtx) {
+        window.AudioContext = function (...args) {
+          const ctx = new NativeAudioCtx(...args);
+          activeContexts.push(ctx);
+          return ctx;
+        };
+        window.AudioContext.prototype = NativeAudioCtx.prototype;
+      }
+
+      setInterval(() => {
+        for (const ctx of activeContexts) {
+          if (ctx && ctx.state === 'suspended') {
+            ctx.resume().catch(() => {});
+          }
+        }
+      }, 2000);
+
+      const cfg = (window.parent && window.parent.__EJS_LAUNCH_CONFIG) || {
+        romUrl: '/rom/mario_tennis.z64',
+        gameTitle: 'MARIO TENNIS 64',
+        core: 'parallel_n64'
+      };
+
+      window.EJS_player = '#game';
+      window.EJS_core = cfg.core || 'parallel_n64';
+      window.EJS_gameName = cfg.gameTitle || 'Nintendo 64 Online';
+      window.EJS_gameUrl = cfg.romUrl || '/rom/mario_tennis.z64';
+      window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+      window.EJS_startOnLoaded = true;
+      window.EJS_threads = false;
+      window.EJS_color = '#22c55e';
+      window.EJS_backgroundColor = '#000000';
+
+      window.EJS_Buttons = {
+        playPause: false,
+        restart: false,
+        mute: false,
+        settings: false,
+        fullscreen: false,
+        saveState: false,
+        loadState: false,
+        screenRecord: false,
+        gamepad: false,
+        cheat: false,
+        volume: false,
+        saveSavFiles: false,
+        loadSavFiles: false,
+        quickSave: false,
+        quickLoad: false,
+        screenshot: false,
+        cacheManager: false
+      };
+
+      // Configuración anti-tilde para Parallel N64 y Mupen64Plus-Next:
+      // - Resolución nativa 320x240 para cero saturación de VRAM/WebGL
+      // - Framebuffer emulation y copias RDRAM desactivadas (evita el bloqueo en repeticiones de Mario Tennis)
+      window.EJS_defaultOptions = {
+        'parallel-n64-cpucore': 'dynamic_recompiler',
+        'parallel-n64-gfxplugin': 'glide64',
+        'parallel-n64-gfxplugin-accuracy': 'medium',
+        'parallel-n64-screensize': '320x240',
+        'parallel-n64-aspectratiohint': 'normal',
+        'parallel-n64-framerate': 'original',
+        'parallel-n64-pak1': 'memory',
+        'parallel-n64-pak2': 'none',
+        'parallel-n64-pak3': 'none',
+        'parallel-n64-pak4': 'none',
+        'mupen64plus-cpucore': 'dynamic_recompiler',
+        'mupen64plus-CountPerOp': '2',
+        'mupen64plus-43screensize': '320x240',
+        'mupen64plus-EnableFBEmulation': 'False',
+        'mupen64plus-EnableCopyColorToRDRAM': 'Off',
+        'mupen64plus-EnableCopyDepthToRDRAM': 'Off',
+        'mupen64plus-EnableCopyAuxToRDRAM': 'False',
+        'mupen64plus-EnableN64DepthCompare': 'Off',
+        'mupen64plus-EnableShadersStorage': 'False',
+        'mupen64plus-aspect': '4:3',
+        'mupen64plus-pak1': 'memory',
+        'mupen64plus-pak2': 'none',
+        'mupen64plus-pak3': 'none',
+        'mupen64plus-pak4': 'none'
+      };
+
+      const script = document.createElement('script');
+      script.src = 'https://cdn.emulatorjs.org/stable/data/loader.js';
+      script.async = true;
+      document.body.appendChild(script);
+    })();
+  </script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Mario Tennis 64 Online // Netplay P2P</title>
+  <title>Nintendo 64 Online // Netplay P2P</title>
   <link rel="stylesheet" href="/style.css" />
   <script src="/socket.io/socket.io.js"></script>
 </head>
@@ -12,8 +12,11 @@
     <!-- BARRA FLOTANTE SUPERIOR -->
     <header class="floating-hud-bar">
       <div class="hud-left">
-        <div class="game-badge">🎾 MARIO TENNIS 64</div>
+        <div id="game-title-badge" class="game-badge">🎾 MARIO TENNIS 64</div>
         <div class="room-code-chip" id="room-code-display">SALA: ...</div>
+        <button id="open-rom-switcher-btn" class="hud-btn btn-switch-rom" title="Subir o cambiar la ROM de otro juego N64 en esta misma sala">
+          📂 Cambiar Juego / Subir ROM
+        </button>
       </div>
 
       <!-- ESTADO RÁPIDO DE LOS 4 JUGADORES (1P A 4P) -->
@@ -57,15 +60,20 @@
     <div class="main-workspace">
       <!-- LIENZO DEL JUEGO -->
       <main class="game-stage">
-        <!-- Contenedor de EmulatorJS (Activo en el navegador del Host 1P) -->
+        <!-- Contenedor aislado de EmulatorJS (Activo en el navegador del Host 1P) -->
         <div id="emulator-container" class="emulator-container">
-          <div id="game"></div>
+          <iframe
+            id="emulator-frame"
+            class="emulator-frame"
+            title="Nintendo 64 WebAssembly Emulator"
+            allow="autoplay; fullscreen; gamepad"
+          ></iframe>
         </div>
 
         <!-- Vista en Tiempo Real para los Invitados (2P, 3P y 4P) -->
         <div id="guest-stage" class="guest-stage hidden">
           <video id="guest-video-stream" class="guest-video" autoplay playsinline muted></video>
-          <img id="guest-fallback-img" class="guest-fallback-img hidden" alt="Stream de Mario Tennis 64" />
+          <img id="guest-fallback-img" class="guest-fallback-img hidden" alt="Stream de Nintendo 64" />
 
           <div class="guest-floating-controls">
             <span id="guest-stream-badge" class="stream-badge">📡 Conectando con 1P (Host)...</span>
@@ -74,17 +82,16 @@
           </div>
         </div>
 
-        <!-- Modal limpio si falta mario_tennis.z64 en /rom/ -->
+        <!-- Modal limpio si no hay ninguna ROM inicial -->
         <div id="rom-missing-modal" class="rom-overlay hidden">
           <div class="rom-card">
-            <h2>🎾 Cargar ROM <code>mario_tennis.z64</code></h2>
+            <h2>🎮 Cargar ROM de Nintendo 64</h2>
             <p>
-              Coloca tu archivo <code>mario_tennis.z64</code> en la carpeta <code>/rom/</code> del proyecto
-              o selecciónalo aquí una sola vez:
+              Selecciona cualquier ROM <code>.z64</code>, <code>.n64</code>, <code>.v64</code> o <code>.zip</code>
+              (Mario Tennis, Mario Party 2/3, Mario Kart 64, Super Smash Bros., etc.) para iniciar la sala:
             </p>
-            <input id="rom-file-picker" type="file" accept=".z64,.n64,.v64,.zip" class="hidden" />
             <button id="select-rom-btn" class="btn-upload-rom">
-              📂 Seleccionar mario_tennis.z64
+              📂 Seleccionar Archivo ROM (.z64 / .n64)
             </button>
           </div>
         </div>
@@ -141,13 +148,67 @@
       </aside>
     </div>
 
+    <!-- MODAL PARA SUBIR O CAMBIAR DE JUEGO (MULTI-ROM EN LA MISMA PÁGINA Y SALA) -->
+    <div id="rom-switcher-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+      <div class="keymap-card rom-switcher-card">
+        <div class="keymap-header">
+          <div>
+            <h2>🎮 Cambiar Juego / Subir otra ROM de N64</h2>
+            <p>
+              Carga cualquier juego (Mario Kart 64, Mario Party 2/3, Super Smash Bros, Mario Tennis, etc.)
+              sin salir de la sala ni desconectar a tus amigos.
+            </p>
+          </div>
+          <button id="close-rom-switcher-btn" class="btn-close-modal">✕</button>
+        </div>
+
+        <!-- ZONA DE SUBIDA DIRECTA DESDE TU PC -->
+        <div class="rom-upload-dropzone" id="rom-dropzone">
+          <input id="rom-file-picker" type="file" accept=".z64,.n64,.v64,.zip" class="hidden" />
+          <div class="dropzone-icon">🕹️</div>
+          <div class="dropzone-title">Subir ROM desde tu PC o Celular (<code>.z64</code>, <code>.n64</code>, <code>.v64</code>, <code>.zip</code>)</div>
+          <div class="dropzone-sub">Se abre al instante en la sala actual y transmite en vivo a 2P, 3P y 4P</div>
+          <button type="button" id="trigger-rom-upload-btn" class="btn-upload-rom">
+            📂 Elegir archivo ROM de mi dispositivo
+          </button>
+          <div id="rom-upload-status" class="rom-upload-status hidden"></div>
+        </div>
+
+        <!-- SELECTOR DE MOTOR ANTI-TILDE -->
+        <div class="core-selector-box">
+          <div class="core-selector-info">
+            <span class="section-label">⚡ MOTOR DE EMULACIÓN N64 (ANTI-TILDE)</span>
+            <small>
+              <strong>Parallel N64 (Recomendado):</strong> más liviano, no se tilda en Mario Tennis ni Mario Kart.<br />
+              <strong>Mupen64Plus-Next:</strong> alta precisión para Mario Party 2 / 3.
+            </small>
+          </div>
+          <div class="core-selector-actions">
+            <select id="emulator-core-select" class="core-select">
+              <option value="parallel_n64">Parallel N64 (Rápido / Anti-Tilde)</option>
+              <option value="n64">Mupen64Plus-Next (GLideN64)</option>
+            </select>
+            <button type="button" id="restart-emulator-btn" class="btn-secondary-modal" title="Reinicia el emulador manteniendo la sala">
+              🔄 Reiniciar Juego
+            </button>
+          </div>
+        </div>
+
+        <!-- LISTA DE JUEGOS DISPONIBLES EN EL SERVIDOR -->
+        <div class="rom-library-section">
+          <span class="section-label">📚 JUEGOS GUARDADOS EN LA SALA (/rom/)</span>
+          <div id="rom-library-list" class="rom-library-list"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- MODAL PARA CONFIGURAR LAS TECLAS (PERSONALIZABLE POR JUGADOR) -->
     <div id="keymap-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
       <div class="keymap-card">
         <div class="keymap-header">
           <div>
-            <h2>⚙️ Configurar Teclas de Mario Tennis 64</h2>
-            <p>Haz clic en cualquier acción y presiona la tecla que quieras usar. Se guarda automáticamente.</p>
+            <h2>⚙️ Configurar Teclas de Nintendo 64</h2>
+            <p>Haz clic en cualquier botón y presiona la tecla que quieras usar. Se guarda automáticamente.</p>
           </div>
           <button id="close-keymap-btn" class="btn-close-modal">✕</button>
         </div>
@@ -176,10 +237,10 @@
       </div>
 
       <div class="touch-actions-zone">
-        <button class="touch-action-btn btn-lob" data-btn="LOB">GLOBO</button>
-        <button class="touch-action-btn btn-drop" data-btn="DROP">DEJADA</button>
-        <button class="touch-action-btn btn-b" data-btn="B">B (SLICE)</button>
-        <button class="touch-action-btn btn-a" data-btn="A">A (LIFT)</button>
+        <button class="touch-action-btn btn-lob" data-btn="LOB">R / Z</button>
+        <button class="touch-action-btn btn-drop" data-btn="DROP">C ▼</button>
+        <button class="touch-action-btn btn-b" data-btn="B">B</button>
+        <button class="touch-action-btn btn-a" data-btn="A">A</button>
       </div>
     </div>
   </div>

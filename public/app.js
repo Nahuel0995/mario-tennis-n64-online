@@ -1,26 +1,26 @@
 // public/app.js
-// Cliente Full-Stack Mario Tennis 64 Online:
-// - Optimizado contra cuelgues (Cero fugas de memoria WebGL / Cero bloqueos de GPU / Fix GLideN64 Framebuffer para Mario Tennis)
+// Plataforma Multijugador Nintendo 64 Online (1P a 4P en Tiempo Real):
+// - Soporte Multi-ROM en la misma página (?room=): sube o cambia cualquier juego (.z64, .n64, .v64, .zip) sin desconectar la sala
+// - Motor Anti-Tilde: iframe aislado de WebAssembly + Cero fugas de AudioNodes + Cuantización analógica + Parallel N64 / Mupen64Plus
 // - Configurador interactivo de teclas guardado en localStorage
-// - Panel lateral de Personas Conectadas con Nombre editable y Chat
-// - Inyección directa de controles 1P a 4P en EmulatorJS (simulateInput sin asignación de basura en RAM)
+// - Panel lateral de Personas Conectadas (1P a 4P) con Nombre editable y Chat
 
 (() => {
   const N64_BTN = {
-    A:     1 << 0,  // Golpe Liftado (Topspin)
-    B:     1 << 1,  // Golpe Cortado (Slice)
-    Z:     1 << 2,  // Gatillo Z
-    START: 1 << 3,  // Pausa / Start
+    A:     1 << 0,  // Botón A (Golpe Liftado / Acelerar / Saltar / Ataque)
+    B:     1 << 1,  // Botón B (Golpe Cortado / Frenar / Especial)
+    Z:     1 << 2,  // Gatillo Z (Ítem / Escudo / Agarre)
+    START: 1 << 3,  // Botón START / Pausa
     DU:    1 << 4,
     DD:    1 << 5,
     DL:    1 << 6,
     DR:    1 << 7,
     L:     1 << 8,
-    R:     1 << 9,
-    CU:    1 << 10, // Globo (Lob)
-    CD:    1 << 11, // Dejada (Drop Shot)
-    CL:    1 << 12,
-    CR:    1 << 13
+    R:     1 << 9,  // Botón R (Derrapar en Kart / Globo)
+    CU:    1 << 10, // C Arriba
+    CD:    1 << 11, // C Abajo
+    CL:    1 << 12, // C Izquierda
+    CR:    1 << 13  // C Derecha
   };
 
   const RTC_ICE_CONFIG = {
@@ -35,7 +35,7 @@
   // ==========================================================================
   // 1. CONFIGURACIÓN PERSONALIZABLE DE TECLAS (GUARDADA EN LOCALSTORAGE)
   // ==========================================================================
-  const KEYMAP_STORAGE_KEY = 'mt64_custom_keymap_v1';
+  const KEYMAP_STORAGE_KEY = 'mt64_custom_keymap_v2';
 
   const DEFAULT_KEYMAP = {
     UP:    'ArrowUp',
@@ -44,9 +44,12 @@
     RIGHT: 'ArrowRight',
     A:     'KeyZ',
     B:     'KeyX',
-    LOB:   'Space',
-    DROP:  'KeyC',
     Z:     'KeyV',
+    R:     'Space',
+    CU:    'KeyW',
+    CD:    'KeyC',
+    CL:    'KeyA',
+    CR:    'KeyD',
     START: 'Enter'
   };
 
@@ -55,12 +58,15 @@
     { key: 'DOWN',  title: 'Mover Abajo ▼',           sub: 'Stick Analógico Abajo' },
     { key: 'LEFT',  title: 'Mover Izquierda ◄',       sub: 'Stick Analógico Izquierda' },
     { key: 'RIGHT', title: 'Mover Derecha ►',         sub: 'Stick Analógico Derecha' },
-    { key: 'A',     title: 'Botón A (Liftado)',       sub: 'Golpe Topspin / Confirmar' },
-    { key: 'B',     title: 'Botón B (Cortado)',       sub: 'Golpe Slice / Atrás' },
-    { key: 'LOB',   title: 'Globo / Smash (A+B)',     sub: 'Tiro alto al fondo o remate' },
-    { key: 'DROP',  title: 'Dejada / Corta (B+C▼)',   sub: 'Tiro corto pegado a la red' },
-    { key: 'Z',     title: 'Gatillo Z',               sub: 'Cambiar ángulo / Servicio' },
-    { key: 'START', title: 'Botón START',             sub: 'Pausa / Saltar repetición' }
+    { key: 'A',     title: 'Botón A (Principal)',     sub: 'Liftado (Tennis) / Acelerar (Kart) / Saltar' },
+    { key: 'B',     title: 'Botón B (Secundario)',    sub: 'Cortado (Tennis) / Frenar / Ataque' },
+    { key: 'R',     title: 'Botón R / Globo (A+B)',   sub: 'Globo (Tennis) / Derrapar-Saltar (Kart)' },
+    { key: 'CD',    title: 'Botón C▼ / Dejada',       sub: 'Dejada (Tennis) / Cámara / Saltar (Smash)' },
+    { key: 'Z',     title: 'Gatillo Z',               sub: 'Lanzar Ítem (Kart) / Escudo (Smash)' },
+    { key: 'CU',    title: 'Botón C▲',                sub: 'Cámara Arriba / Saltar (Smash)' },
+    { key: 'CL',    title: 'Botón C◄',                sub: 'Cámara Izquierda' },
+    { key: 'CR',    title: 'Botón C►',                sub: 'Cámara Derecha' },
+    { key: 'START', title: 'Botón START',             sub: 'Pausa / Iniciar Partida' }
   ];
 
   let userKeymap = { ...DEFAULT_KEYMAP };
@@ -183,7 +189,7 @@
   refreshShareUrlBox();
 
   // ==========================================================================
-  // 3. MOTOR DE CONTROLES (TECLADO CONFIGURABLE + GAMEPAD API + TÁCTIL)
+  // 3. MOTOR DE CONTROLES (TECLADO + GAMEPAD + TÁCTIL CON CUANTIZACIÓN ANTI-TILDE)
   // ==========================================================================
   const pressedKeys = new Set();
   const touchState = { stickX: 0, stickY: 0, buttons: new Set() };
@@ -197,14 +203,12 @@
     { bitmask: 0, stickX: 0, stickY: 0 }
   ];
 
-  function isTypingInInput() {
-    const tag = document.activeElement?.tagName;
-    return tag === 'INPUT' || tag === 'TEXTAREA';
+  function isTypingInInput(win = window) {
+    const tag = win.document?.activeElement?.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
   }
 
-  // Usamos capture=true para interceptar nuestras teclas configuradas antes que EmulatorJS
-  // evitando que EmulatorJS duplique eventos en su cola SDL (lo que causaba tildes)
-  window.addEventListener('keydown', (e) => {
+  function handleKeyDownEvent(e) {
     if (!keymapModal.classList.contains('hidden') && listeningActionKey) {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -217,7 +221,7 @@
       return;
     }
 
-    if (isTypingInInput()) return;
+    if (isTypingInInput(window)) return;
 
     const mappedCodes = Object.values(userKeymap);
     if (mappedCodes.includes(e.code)) {
@@ -225,19 +229,23 @@
       e.stopImmediatePropagation();
       pressedKeys.add(e.code);
     }
-  }, true);
+  }
 
-  window.addEventListener('keyup', (e) => {
+  function handleKeyUpEvent(e) {
     if (pressedKeys.has(e.code)) {
       e.preventDefault();
       e.stopImmediatePropagation();
       pressedKeys.delete(e.code);
     }
-  }, true);
+  }
 
-  window.addEventListener('blur', () => {
-    pressedKeys.clear();
-  });
+  // Exponer a /emulator.html para que las teclas funcionen igual aunque el foco esté dentro del iframe
+  window.__handleEmulatorKeyDown = handleKeyDownEvent;
+  window.__handleEmulatorKeyUp = handleKeyUpEvent;
+
+  window.addEventListener('keydown', handleKeyDownEvent, true);
+  window.addEventListener('keyup', handleKeyUpEvent, true);
+  window.addEventListener('blur', () => pressedKeys.clear());
 
   window.addEventListener('gamepadconnected', (e) => {
     activePhysicalGamepadIndex = e.gamepad.index;
@@ -316,19 +324,19 @@
   initTouchControls();
 
   function applyN64Calibration(rawX, rawY) {
-    const deadzone = 0.12;
+    const deadzone = 0.14;
     const peakRange = 0.85;
     const mag = Math.hypot(rawX, rawY);
     if (mag < deadzone) return { x: 0, y: 0 };
     const norm = Math.min(1, (mag - deadzone) / (1 - deadzone));
     const scale = (norm / mag) * peakRange;
-    return {
-      x: Math.max(-1, Math.min(1, rawX * scale)),
-      y: Math.max(-1, Math.min(1, rawY * scale))
-    };
+    // Cuantizamos en 12 escalones discretos para eliminar micro-oscilaciones del joystick
+    // que saturaban simulateInput() y el socket en cada fotograma
+    const qx = Math.round(Math.max(-1, Math.min(1, rawX * scale)) * 12) / 12;
+    const qy = Math.round(Math.max(-1, Math.min(1, rawY * scale)) * 12) / 12;
+    return { x: qx, y: qy };
   }
 
-  // Buffer reutilizable de 4 bytes para no crear basura en memoria en cada fotograma
   const reusablePacket = new ArrayBuffer(4);
   const reusableView = new DataView(reusablePacket);
 
@@ -376,12 +384,15 @@
       stickY = cal.y;
     }
 
-    // 2. Teclado con el mapeo personalizado del jugador
+    // 2. Teclado personalizado
     if (pressedKeys.has(userKeymap.A))     bitmask |= N64_BTN.A;
     if (pressedKeys.has(userKeymap.B))     bitmask |= N64_BTN.B;
-    if (pressedKeys.has(userKeymap.LOB))   bitmask |= (N64_BTN.A | N64_BTN.B | N64_BTN.CU);
-    if (pressedKeys.has(userKeymap.DROP))  bitmask |= (N64_BTN.B | N64_BTN.CD);
+    if (pressedKeys.has(userKeymap.R))     bitmask |= (N64_BTN.R | N64_BTN.A | N64_BTN.B);
     if (pressedKeys.has(userKeymap.Z))     bitmask |= N64_BTN.Z;
+    if (pressedKeys.has(userKeymap.CU))    bitmask |= N64_BTN.CU;
+    if (pressedKeys.has(userKeymap.CD))    bitmask |= (N64_BTN.CD | N64_BTN.B);
+    if (pressedKeys.has(userKeymap.CL))    bitmask |= N64_BTN.CL;
+    if (pressedKeys.has(userKeymap.CR))    bitmask |= N64_BTN.CR;
     if (pressedKeys.has(userKeymap.START)) bitmask |= N64_BTN.START;
 
     let kx = 0;
@@ -392,19 +403,19 @@
     if (pressedKeys.has(userKeymap.DOWN))  ky += 1;
     if (kx !== 0 || ky !== 0) {
       const mag = Math.hypot(kx, ky);
-      stickX = (kx / mag) * 0.85;
-      stickY = (ky / mag) * 0.85;
+      stickX = Math.round(((kx / mag) * 0.85) * 12) / 12;
+      stickY = Math.round(((ky / mag) * 0.85) * 12) / 12;
     }
 
     // 3. Controles táctiles
     if (touchState.buttons.has('A'))     bitmask |= N64_BTN.A;
     if (touchState.buttons.has('B'))     bitmask |= N64_BTN.B;
-    if (touchState.buttons.has('LOB'))   bitmask |= (N64_BTN.A | N64_BTN.B | N64_BTN.CU);
+    if (touchState.buttons.has('LOB'))   bitmask |= (N64_BTN.R | N64_BTN.Z | N64_BTN.A | N64_BTN.B);
     if (touchState.buttons.has('DROP'))  bitmask |= (N64_BTN.B | N64_BTN.CD);
     if (touchState.buttons.has('START')) bitmask |= N64_BTN.START;
     if (touchState.stickX !== 0 || touchState.stickY !== 0) {
-      stickX = touchState.stickX;
-      stickY = touchState.stickY;
+      stickX = Math.round(touchState.stickX * 12) / 12;
+      stickY = Math.round(touchState.stickY * 12) / 12;
     }
 
     reusableView.setUint16(0, bitmask, true);
@@ -423,15 +434,14 @@
     const view = new DataView(ab);
     return {
       bitmask: view.getUint16(0, true),
-      stickX: view.getInt8(2) / 127,
-      stickY: view.getInt8(3) / 127
+      stickX: Math.round((view.getInt8(2) / 127) * 12) / 12,
+      stickY: Math.round((view.getInt8(3) / 127) * 12) / 12
     };
   }
 
   // ==========================================================================
-  // 4. INYECCIÓN SIN FUGAS DE MEMORIA EN EMULATORJS (1P A 4P)
+  // 4. INYECCIÓN OPTIMIZADA EN EMULATORJS (DENTRO DEL IFRAME AISLADO)
   // ==========================================================================
-  // Pre-asignamos un Int32Array(24) por cada uno de los 4 puertos para 0 Garbage Collection
   const prevSimCache = [
     new Int32Array(24).fill(-1),
     new Int32Array(24).fill(-1),
@@ -439,12 +449,24 @@
     new Int32Array(24).fill(-1)
   ];
 
+  function resetInputCache() {
+    for (let s = 0; s < 4; s++) {
+      prevSimCache[s].fill(-1);
+    }
+  }
+
+  function getEmulatorGameManager() {
+    const frame = document.getElementById('emulator-frame');
+    const emu = frame?.contentWindow?.EJS_emulator;
+    return emu?.gameManager || null;
+  }
+
   function injectInputIntoEmulatorJS(slot, state) {
     n64Ports[slot].bitmask = state.bitmask || 0;
     n64Ports[slot].stickX = state.stickX || 0;
     n64Ports[slot].stickY = state.stickY || 0;
 
-    const gm = window.EJS_emulator?.gameManager;
+    const gm = getEmulatorGameManager();
     const simFn = gm?.functions?.simulateInput || gm?.simulateInput;
     if (typeof simFn !== 'function') return;
 
@@ -463,6 +485,12 @@
       }
     };
 
+    // Cuantizamos el valor analógico (0..32767) en múltiplos de 2048 para cero saturación de llamadas Wasm
+    const quantizeAxis = (v) => {
+      if (v <= 0.08) return 0;
+      return Math.min(32767, Math.round((v * 32767) / 2048) * 2048);
+    };
+
     updateBtn(0,  (bm & N64_BTN.B)     ? 1 : 0);
     updateBtn(8,  (bm & N64_BTN.A)     ? 1 : 0);
     updateBtn(12, (bm & N64_BTN.Z)     ? 1 : 0);
@@ -473,10 +501,10 @@
     updateBtn(7,  (bm & N64_BTN.DR)    ? 1 : 0);
     updateBtn(10, (bm & N64_BTN.L)     ? 1 : 0);
     updateBtn(11, (bm & N64_BTN.R)     ? 1 : 0);
-    updateBtn(16, sx >  0.08 ? Math.round(sx * 32767)  : 0);
-    updateBtn(17, sx < -0.08 ? Math.round(-sx * 32767) : 0);
-    updateBtn(18, sy >  0.08 ? Math.round(sy * 32767)  : 0);
-    updateBtn(19, sy < -0.08 ? Math.round(-sy * 32767) : 0);
+    updateBtn(16, quantizeAxis(sx));
+    updateBtn(17, quantizeAxis(-sx));
+    updateBtn(18, quantizeAxis(sy));
+    updateBtn(19, quantizeAxis(-sy));
     updateBtn(20, (bm & N64_BTN.CR)    ? 32767 : 0);
     updateBtn(21, (bm & N64_BTN.CL)    ? 32767 : 0);
     updateBtn(22, (bm & N64_BTN.CD)    ? 32767 : 0);
@@ -484,146 +512,325 @@
   }
 
   // ==========================================================================
-  // 5. INICIALIZACIÓN DE EMULATORJS CON PARCHES ANTI-TILDE PARA MARIO TENNIS 64
+  // 5. GESTIÓN MULTI-ROM Y LANZAMIENTO AISLADO DE EMULATORJS
   // ==========================================================================
   let emulatorStarted = false;
-  let capturedAudioDest = null;
   let hostMediaStream = null;
   let canvasWatcherId = null;
+  let activeRomUrl = '/rom/mario_tennis.z64';
+  let activeGameTitle = 'MARIO TENNIS 64';
+  let activeCore = localStorage.getItem('n64_preferred_core') || 'parallel_n64';
+  let availableServerRoms = [];
 
-  function hookEmulatorWebAudio() {
-    const NativeAudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!NativeAudioCtx || window._audioHooked) return;
-    window._audioHooked = true;
+  const coreSelectEl = document.getElementById('emulator-core-select');
+  if (coreSelectEl) {
+    coreSelectEl.value = activeCore;
+  }
 
-    window.AudioContext = function (...args) {
-      const ctx = new NativeAudioCtx(...args);
-      capturedAudioDest = ctx.createMediaStreamDestination();
-      const origConnect = AudioNode.prototype.connect;
-      AudioNode.prototype.connect = function (dest, ...rest) {
-        if (dest === ctx.destination && capturedAudioDest) {
-          try { origConnect.call(this, capturedAudioDest); } catch (_) {}
-        }
-        return origConnect.call(this, dest, ...rest);
-      };
-      return ctx;
-    };
+  function updateGameTitleUI(title) {
+    activeGameTitle = String(title || 'NINTENDO 64').toUpperCase();
+    const badge = document.getElementById('game-title-badge');
+    if (badge) {
+      badge.textContent = `🎮 ${activeGameTitle}`;
+    }
+    document.title = `${activeGameTitle} // N64 Online`;
+  }
+
+  function attachStreamToAllPeers(newStream) {
+    hostMediaStream = newStream;
+    const newVideoTrack = newStream.getVideoTracks()[0];
+    if (!newVideoTrack) return;
+
+    if ('contentHint' in newVideoTrack) {
+      newVideoTrack.contentHint = 'motion';
+    }
+
+    for (const [peerSocketId, peer] of peers.entries()) {
+      const senders = peer.pc.getSenders ? peer.pc.getSenders() : [];
+      const videoSender = senders.find((s) => s.track && s.track.kind === 'video');
+      if (videoSender) {
+        videoSender.replaceTrack(newVideoTrack).catch(() => {
+          createHostPeerConnection(peerSocketId, peer.slot);
+        });
+      } else {
+        createHostPeerConnection(peerSocketId, peer.slot);
+      }
+    }
   }
 
   function startHostStreamCaptureWatcher() {
-    if (canvasWatcherId) return;
+    if (canvasWatcherId) {
+      clearInterval(canvasWatcherId);
+      canvasWatcherId = null;
+    }
 
     canvasWatcherId = setInterval(() => {
-      if (hostMediaStream) {
+      const frame = document.getElementById('emulator-frame');
+      const canvas = frame?.contentDocument?.querySelector('#game canvas');
+      if (canvas && canvas.width > 0 && typeof canvas.captureStream === 'function') {
         clearInterval(canvasWatcherId);
         canvasWatcherId = null;
-        return;
-      }
-      const canvas = document.querySelector('#game canvas');
-      if (canvas && canvas.width > 0 && typeof canvas.captureStream === 'function') {
-        // Capturamos a 30 FPS por hardware (cero bloqueos de GPU glReadPixels)
-        const stream = canvas.captureStream(30);
-        if (capturedAudioDest) {
-          capturedAudioDest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
-        }
-        hostMediaStream = stream;
-        appendChatLine('system', '🟢 Transmisión WebRTC acelerada por hardware lista.');
 
-        for (const [peerSocketId, peer] of peers.entries()) {
-          createHostPeerConnection(peerSocketId, peer.slot);
-        }
+        const stream = canvas.captureStream(30);
+        attachStreamToAllPeers(stream);
+        appendChatLine('system', `🟢 Stream en vivo de ${activeGameTitle} activo (60Hz inputs / 30fps video).`);
       }
-    }, 700);
+    }, 600);
   }
 
-  async function bootHostEmulator(romUrl = '/rom/mario_tennis.z64') {
-    if (emulatorStarted) return;
+  async function bootHostEmulator(romUrl = activeRomUrl, gameTitle = activeGameTitle, core = activeCore, forceReload = false) {
+    if (emulatorStarted && !forceReload) return;
 
-    try {
-      const check = await fetch('/api/rom-status');
-      const status = await check.json();
-      if (status.lanUrl) {
-        lanBaseUrl = status.lanUrl;
-        refreshShareUrlBox();
-      }
-      if (!status.exists && romUrl === '/rom/mario_tennis.z64') {
-        document.getElementById('rom-missing-modal').classList.remove('hidden');
-        return;
-      }
-    } catch (_) {}
+    activeRomUrl = romUrl || '/rom/mario_tennis.z64';
+    activeCore = core || 'parallel_n64';
+    updateGameTitleUI(gameTitle);
+
+    if (! activeRomUrl.startsWith('blob:')) {
+      try {
+        const check = await fetch('/api/rom-status');
+        const status = await check.json();
+        if (status.lanUrl) {
+          lanBaseUrl = status.lanUrl;
+          refreshShareUrlBox();
+        }
+        if (Array.isArray(status.roms)) {
+          availableServerRoms = status.roms;
+          renderRomLibraryList();
+        }
+        if (!status.exists && activeRomUrl === '/rom/mario_tennis.z64') {
+          document.getElementById('rom-missing-modal').classList.remove('hidden');
+          return;
+        }
+      } catch (_) {}
+    }
 
     document.getElementById('rom-missing-modal').classList.add('hidden');
     emulatorStarted = true;
+    resetInputCache();
 
-    hookEmulatorWebAudio();
+    // Configuramos los parámetros que leerá /emulator.html al cargarse en el iframe
+    window.__EJS_LAUNCH_CONFIG = {
+      romUrl: activeRomUrl,
+      gameTitle: activeGameTitle,
+      core: activeCore
+    };
+
+    const frame = document.getElementById('emulator-frame');
+    frame.src = `/emulator.html?v=${Date.now()}`;
+
     startHostStreamCaptureWatcher();
-
-    window.EJS_player = '#game';
-    window.EJS_core = 'n64';
-    window.EJS_gameName = 'Mario Tennis 64';
-    window.EJS_gameUrl = romUrl;
-    window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
-    window.EJS_startOnLoaded = true;
-    window.EJS_color = '#22c55e';
-    window.EJS_backgroundColor = '#000000';
-
-    window.EJS_Buttons = {
-      playPause: false,
-      restart: false,
-      mute: false,
-      settings: false,
-      fullscreen: false,
-      saveState: false,
-      loadState: false,
-      screenRecord: false,
-      gamepad: false,
-      cheat: false,
-      volume: false,
-      saveSavFiles: false,
-      loadSavFiles: false,
-      quickSave: false,
-      quickLoad: false,
-      screenshot: false,
-      cacheManager: false
-    };
-
-    // Ajustes críticos del núcleo Mupen64Plus-Next para evitar que Mario Tennis 64 se tilde en las repeticiones:
-    // Desactivar EnableFBEmulation y CopyColorToRDRAM evita el clásico cuelgue de GLideN64 en Mario Tennis.
-    window.EJS_defaultOptions = {
-      'mupen64plus-cpucore': 'dynamic_recompiler',
-      'mupen64plus-CountPerOp': '2',
-      'mupen64plus-EnableFBEmulation': 'False',
-      'mupen64plus-EnableCopyColorToRDRAM': 'Off',
-      'mupen64plus-EnableCopyDepthToRDRAM': 'Off',
-      'mupen64plus-aspect': '4:3',
-      'mupen64plus-pak1': 'memory',
-      'mupen64plus-pak2': 'none',
-      'mupen64plus-pak3': 'none',
-      'mupen64plus-pak4': 'none'
-    };
-
-    const script = document.createElement('script');
-    script.src = 'https://cdn.emulatorjs.org/stable/data/loader.js';
-    script.async = true;
-    document.body.appendChild(script);
   }
 
-  const romPicker = document.getElementById('rom-file-picker');
-  document.getElementById('select-rom-btn').addEventListener('click', () => romPicker.click());
-  romPicker.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const localBlobUrl = URL.createObjectURL(file);
-    bootHostEmulator(localBlobUrl);
+  // ==========================================================================
+  // 6. MODAL CAMBIAR JUEGO / SUBIR CUALQUIER ROM N64 EN LA MISMA PÁGINA
+  // ==========================================================================
+  const romSwitcherModal = document.getElementById('rom-switcher-modal');
+  const romFilePicker = document.getElementById('rom-file-picker');
+  const romUploadStatus = document.getElementById('rom-upload-status');
+
+  function cleanTitleFromFilename(name) {
+    return String(name || 'JUEGO N64')
+      .replace(/\.(z64|n64|v64|zip)$/i, '')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toUpperCase() || 'JUEGO N64';
+  }
+
+  function renderRomLibraryList() {
+    const container = document.getElementById('rom-library-list');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (!availableServerRoms || availableServerRoms.length === 0) {
+      container.innerHTML = `<div class="rom-library-file">No hay ROMs guardadas aún. Sube cualquier archivo .z64 arriba.</div>`;
+      return;
+    }
+
+    availableServerRoms.forEach((rom) => {
+      const item = document.createElement('div');
+      item.className = 'rom-library-item';
+      item.innerHTML = `
+        <div class="rom-library-meta">
+          <span class="rom-library-title">🎮 ${escapeHtml(rom.title)}</span>
+          <span class="rom-library-file">${escapeHtml(rom.filename)} (${rom.sizeMB || '?'} MB)</span>
+        </div>
+        <button type="button" class="btn-play-rom-item">▶ Jugar en la Sala</button>
+      `;
+
+      item.querySelector('.btn-play-rom-item').addEventListener('click', () => {
+        switchGameInRoom({
+          romUrl: rom.url,
+          title: rom.title,
+          core: activeCore,
+          isLocalBlob: false
+        });
+        romSwitcherModal.classList.add('hidden');
+      });
+
+      container.appendChild(item);
+    });
+  }
+
+  async function refreshRomLibraryFromServer() {
     try {
-      await fetch('/api/upload-rom', { method: 'POST', body: file });
+      const res = await fetch('/api/roms');
+      const data = await res.json();
+      if (data && Array.isArray(data.roms)) {
+        availableServerRoms = data.roms;
+        renderRomLibraryList();
+      }
     } catch (_) {}
+  }
+
+  function switchGameInRoom({ romUrl, title, core = activeCore, isLocalBlob = false }) {
+    activeCore = core;
+    if (coreSelectEl) coreSelectEl.value = activeCore;
+    localStorage.setItem('n64_preferred_core', activeCore);
+
+    if (isHost) {
+      bootHostEmulator(romUrl, title, activeCore, true);
+    }
+
+    socket.emit('change-room-game', {
+      roomId: currentRoomId,
+      title,
+      url: romUrl,
+      core: activeCore,
+      isLocalBlob
+    });
+  }
+
+  async function handleSelectedRomFile(file) {
+    if (!file) return;
+    const gameTitle = cleanTitleFromFilename(file.name);
+
+    if (romUploadStatus) {
+      romUploadStatus.classList.remove('hidden');
+      romUploadStatus.textContent = `⏳ Cargando ${gameTitle}...`;
+    }
+
+    // Si somos el Host (1P), cargamos el juego INSTANTÁNEAMENTE desde un Blob URL local
+    // (0 segundos de espera, sin depender de la velocidad de subida a Render)
+    if (isHost) {
+      const localBlobUrl = URL.createObjectURL(file);
+      switchGameInRoom({
+        romUrl: localBlobUrl,
+        title: gameTitle,
+        core: activeCore,
+        isLocalBlob: true
+      });
+      romSwitcherModal.classList.add('hidden');
+    }
+
+    // Además lo subimos en segundo plano al servidor para que quede en la lista de la sala
+    try {
+      const q = new URLSearchParams({
+        name: file.name,
+        room: isHost ? '' : currentRoomId
+      });
+      const res = await fetch(`/api/upload-rom?${q.toString()}`, {
+        method: 'POST',
+        headers: {
+          'x-rom-name': encodeURIComponent(file.name),
+          'x-room-id': isHost ? '' : currentRoomId
+        },
+        body: file
+      });
+      const data = await res.json();
+      if (data && Array.isArray(data.roms)) {
+        availableServerRoms = data.roms;
+        renderRomLibraryList();
+      }
+      if (romUploadStatus) {
+        romUploadStatus.textContent = `✅ ¡${gameTitle} listo en la sala!`;
+      }
+      if (!isHost) {
+        romSwitcherModal.classList.add('hidden');
+      }
+    } catch (_) {
+      if (romUploadStatus) {
+        romUploadStatus.textContent = isHost
+          ? `✅ ${gameTitle} ejecutándose desde tu navegador.`
+          : `⚠️ Error al subir el archivo al servidor.`;
+      }
+    }
+  }
+
+  document.getElementById('open-rom-switcher-btn').addEventListener('click', () => {
+    refreshRomLibraryFromServer();
+    if (romUploadStatus) romUploadStatus.classList.add('hidden');
+    romSwitcherModal.classList.remove('hidden');
+  });
+
+  document.getElementById('close-rom-switcher-btn').addEventListener('click', () => {
+    romSwitcherModal.classList.add('hidden');
+  });
+
+  document.getElementById('trigger-rom-upload-btn').addEventListener('click', () => {
+    romFilePicker.value = '';
+    romFilePicker.click();
+  });
+
+  document.getElementById('select-rom-btn').addEventListener('click', () => {
+    romFilePicker.value = '';
+    romFilePicker.click();
+  });
+
+  romFilePicker.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) handleSelectedRomFile(file);
+  });
+
+  // Soporte Drag & Drop para arrastrar cualquier ROM .z64/.n64/.v64/.zip
+  const dropzone = document.getElementById('rom-dropzone');
+  if (dropzone) {
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+    dropzone.addEventListener('dragleave', () => {
+      dropzone.classList.remove('dragover');
+    });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) handleSelectedRomFile(file);
+    });
+  }
+
+  // Selector de motor N64 (Parallel N64 vs Mupen64Plus-Next) y botón de Reinicio rápido
+  if (coreSelectEl) {
+    coreSelectEl.addEventListener('change', () => {
+      activeCore = coreSelectEl.value;
+      localStorage.setItem('n64_preferred_core', activeCore);
+      if (isHost && emulatorStarted) {
+        bootHostEmulator(activeRomUrl, activeGameTitle, activeCore, true);
+        appendChatLine('system', `⚙️ Motor N64 cambiado a: ${activeCore === 'parallel_n64' ? 'Parallel N64 (Anti-Tilde)' : 'Mupen64Plus-Next'}.`);
+      }
+    });
+  }
+
+  document.getElementById('restart-emulator-btn').addEventListener('click', () => {
+    if (isHost) {
+      bootHostEmulator(activeRomUrl, activeGameTitle, activeCore, true);
+      romSwitcherModal.classList.add('hidden');
+      appendChatLine('system', `🔄 Juego reiniciado sin cerrar la sala.`);
+    } else {
+      socket.emit('request-stream-sync', { roomId: currentRoomId });
+      romSwitcherModal.classList.add('hidden');
+    }
   });
 
   // ==========================================================================
-  // 6. RED MULTIJUGADOR (SOCKET.IO + WEBRTC P2P)
+  // 7. RED MULTIJUGADOR (SOCKET.IO + WEBRTC P2P)
   // ==========================================================================
-  const socket = window.io();
+  const socket = window.io({
+    reconnection: true,
+    reconnectionDelay: 500,
+    timeout: 20000
+  });
   const peers = new Map();
   let mySlot = 0;
   let isHost = false;
@@ -635,6 +842,10 @@
       if (info.lanUrl) {
         lanBaseUrl = info.lanUrl;
         refreshShareUrlBox();
+      }
+      if (Array.isArray(info.roms)) {
+        availableServerRoms = info.roms;
+        renderRomLibraryList();
       }
     })
     .catch(() => {});
@@ -653,6 +864,15 @@
       mySlot = res.slot;
       isHost = res.isHost;
 
+      if (Array.isArray(res.roms)) {
+        availableServerRoms = res.roms;
+        renderRomLibraryList();
+      }
+
+      if (res.room?.currentGame?.title) {
+        updateGameTitleUI(res.room.currentGame.title);
+      }
+
       if (!myPlayerName) {
         myPlayerName = `Jugador ${mySlot + 1}`;
         nameInput.value = myPlayerName;
@@ -663,7 +883,9 @@
       if (isHost) {
         document.getElementById('emulator-container').classList.remove('hidden');
         document.getElementById('guest-stage').classList.add('hidden');
-        bootHostEmulator('/rom/mario_tennis.z64');
+        const initialUrl = res.room?.currentGame?.url || '/rom/mario_tennis.z64';
+        const initialTitle = res.room?.currentGame?.title || 'MARIO TENNIS 64';
+        bootHostEmulator(initialUrl, initialTitle, activeCore, false);
       } else {
         document.getElementById('emulator-container').classList.add('hidden');
         document.getElementById('guest-stage').classList.remove('hidden');
@@ -678,15 +900,42 @@
       myPingMs = Math.max(1, Math.round(performance.now() - t0));
       socket.emit('update-player-meta', { ping: myPingMs });
     });
-  }, 3000);
+  }, 4000);
 
   socket.on('room-state', (room) => {
+    if (room?.currentGame?.title) {
+      updateGameTitleUI(room.currentGame.title);
+    }
     renderConnectedPlayersSidebar(room);
   });
 
-  socket.on('rom-ready', ({ url }) => {
+  socket.on('room-game-metadata', ({ title, url, core, changedBySocketId }) => {
+    if (title) updateGameTitleUI(title);
+    if (isHost && changedBySocketId !== socket.id && url) {
+      bootHostEmulator(url, title || activeGameTitle, core || activeCore, true);
+    }
+  });
+
+  socket.on('room-game-changed', ({ game, roms }) => {
+    if (Array.isArray(roms)) {
+      availableServerRoms = roms;
+      renderRomLibraryList();
+    }
+    if (game) {
+      updateGameTitleUI(game.title);
+      if (isHost && game.url) {
+        bootHostEmulator(game.url, game.title, game.core || activeCore, true);
+      }
+    }
+  });
+
+  socket.on('rom-ready', ({ url, title, roms }) => {
+    if (Array.isArray(roms)) {
+      availableServerRoms = roms;
+      renderRomLibraryList();
+    }
     if (isHost && !emulatorStarted) {
-      bootHostEmulator(url);
+      bootHostEmulator(url, title || 'MARIO TENNIS 64', activeCore, false);
     }
   });
 
@@ -712,13 +961,18 @@
     }
   });
 
-  socket.on('host-promoted', ({ newHostSocketId }) => {
+  socket.on('host-promoted', ({ newHostSocketId, currentGame }) => {
     if (socket.id === newHostSocketId) {
       isHost = true;
       mySlot = 0;
       document.getElementById('emulator-container').classList.remove('hidden');
       document.getElementById('guest-stage').classList.add('hidden');
-      bootHostEmulator('/rom/mario_tennis.z64');
+      bootHostEmulator(
+        currentGame?.url || activeRomUrl,
+        currentGame?.title || activeGameTitle,
+        activeCore,
+        true
+      );
     }
   });
 
@@ -801,6 +1055,9 @@
   }
 
   async function createGuestPeerConnection(hostSocketId) {
+    const existing = peers.get(hostSocketId);
+    if (existing) existing.pc.close();
+
     const pc = new RTCPeerConnection(RTC_ICE_CONFIG);
     const guestVideo = document.getElementById('guest-video-stream');
     const badge = document.getElementById('guest-stream-badge');
@@ -812,7 +1069,7 @@
       if (e.streams && e.streams[0]) {
         guestVideo.srcObject = e.streams[0];
         guestVideo.play().catch(() => {});
-        badge.textContent = `🟢 Partido en Vivo Conectado (${mySlot + 1}P)`;
+        badge.textContent = `🟢 En Vivo (${mySlot + 1}P) • ${activeGameTitle}`;
       }
     };
 
@@ -848,7 +1105,7 @@
     socket.emit('request-stream-sync', { roomId: currentRoomId });
   });
 
-  // Bucle de 60Hz para aplicar controles locales y remotos
+  // Bucle de 60Hz para aplicar controles locales y remotos sin duplicar paquetes
   let lastSentBitmask = -1;
   let lastSentX = 0;
   let lastSentY = 0;
@@ -857,33 +1114,37 @@
     const localState = sampleLocalController();
 
     if (isHost) {
-      // El Host (1P) inyecta sus teclas personalizadas directamente en el slot 0
       injectInputIntoEmulatorJS(0, localState);
     } else {
       n64Ports[mySlot].bitmask = localState.bitmask;
       n64Ports[mySlot].stickX = localState.stickX;
       n64Ports[mySlot].stickY = localState.stickY;
 
+      const changed =
+        localState.bitmask !== lastSentBitmask ||
+        Math.abs(localState.stickX - lastSentX) > 0.05 ||
+        Math.abs(localState.stickY - lastSentY) > 0.05;
+
       let sentViaWebRTC = false;
       for (const peer of peers.values()) {
         if (peer.dc && peer.dc.readyState === 'open') {
           try {
-            peer.dc.send(localState.packet);
+            if (changed) {
+              peer.dc.send(localState.packet);
+            }
             sentViaWebRTC = true;
           } catch (_) {}
         }
       }
 
-      const changed =
-        localState.bitmask !== lastSentBitmask ||
-        Math.abs(localState.stickX - lastSentX) > 0.04 ||
-        Math.abs(localState.stickY - lastSentY) > 0.04;
+      if (changed) {
+        lastSentBitmask = localState.bitmask;
+        lastSentX = localState.stickX;
+        lastSentY = localState.stickY;
 
-      if (changed || !sentViaWebRTC) {
-        if (changed) {
-          lastSentBitmask = localState.bitmask;
-          lastSentX = localState.stickX;
-          lastSentY = localState.stickY;
+        // Solo enviamos por Socket.io si el canal WebRTC P2P aún no está abierto
+        // (evita saturar el WebSocket de Render con paquetes duplicados)
+        if (!sentViaWebRTC) {
           socket.emit('input-fallback', {
             roomId: currentRoomId,
             slot: mySlot,
@@ -913,7 +1174,7 @@
   requestAnimationFrame(updateInputsLoop);
 
   // ==========================================================================
-  // 7. PANEL LATERAL DE PERSONAS CONECTADAS, NOMBRES Y CHAT
+  // 8. PANEL LATERAL DE PERSONAS CONECTADAS, NOMBRES Y CHAT
   // ==========================================================================
   function renderConnectedPlayersSidebar(room) {
     if (!room || !Array.isArray(room.players)) return;

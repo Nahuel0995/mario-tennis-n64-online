@@ -213,6 +213,7 @@ body {
 }
 
 .emulator-container,
+.emulator-frame,
 #game,
 .guest-stage,
 .guest-video,
@@ -221,6 +222,19 @@ body {
   height: 100%;
   display: block;
   object-fit: contain;
+  border: none;
+}
+
+.btn-switch-rom {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #ffffff;
+  border: 1px solid rgba(96, 165, 250, 0.5);
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+
+.btn-switch-rom:hover {
+  filter: brightness(1.1);
 }
 
 .guest-stage {
@@ -811,4 +825,145 @@ body {
     border-left: none;
     border-top: 1px solid var(--border-subtle);
   }
+}
+
+/* ==========================================================================
+   MODAL CAMBIAR JUEGO / SUBIR CUALQUIER ROM N64
+   ========================================================================== */
+.rom-switcher-card {
+  max-width: 660px;
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rom-upload-dropzone {
+  background: rgba(19, 28, 49, 0.85);
+  border: 2px dashed rgba(59, 130, 246, 0.65);
+  border-radius: 14px;
+  padding: 18px;
+  text-align: center;
+  transition: all 0.15s ease;
+}
+
+.rom-upload-dropzone.dragover {
+  border-color: var(--accent-gold);
+  background: rgba(250, 204, 21, 0.12);
+}
+
+.dropzone-icon {
+  font-size: 28px;
+  margin-bottom: 6px;
+}
+
+.dropzone-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: #f8fafc;
+  margin-bottom: 4px;
+}
+
+.dropzone-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.rom-upload-status {
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #4ade80;
+}
+
+.core-selector-box {
+  background: #0b1120;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.core-selector-info small {
+  display: block;
+  font-size: 11px;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+.core-selector-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.core-select {
+  background: #131c31;
+  color: #f8fafc;
+  border: 1px solid #3b82f6;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rom-library-section {
+  background: #0b1120;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.rom-library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.rom-library-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #131c31;
+  border: 1px solid #2d3d5b;
+  border-radius: 9px;
+  padding: 9px 12px;
+  gap: 10px;
+}
+
+.rom-library-meta {
+  display: flex;
+  flex-direction: column;
+}
+
+.rom-library-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.rom-library-file {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.btn-play-rom-item {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #052e16;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
 }
