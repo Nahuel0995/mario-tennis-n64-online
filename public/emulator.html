@@ -18,9 +18,21 @@
       user-select: none;
     }
     #game {
-      width: 100%;
-      height: 100%;
-      display: block;
+      width: 100% !important;
+      height: 100% !important;
+      display: flex !important;
+      align-items: center;
+      justify-content: center;
+      background: #000000;
+    }
+    #game canvas,
+    .ejs_canvas {
+      width: 100% !important;
+      height: 100% !important;
+      max-width: 100% !important;
+      max-height: 100% !important;
+      object-fit: contain !important;
+      display: block !important;
     }
     /* Ocultar barras y menús complejos internos de EmulatorJS */
     .ejs_menu_bar,
@@ -75,11 +87,11 @@
       const cfg = (window.parent && window.parent.__EJS_LAUNCH_CONFIG) || {
         romUrl: '/rom/mario_tennis.z64',
         gameTitle: 'MARIO TENNIS 64',
-        core: 'parallel_n64'
+        core: 'n64'
       };
 
       window.EJS_player = '#game';
-      window.EJS_core = cfg.core || 'parallel_n64';
+      window.EJS_core = cfg.core || 'n64';
       window.EJS_gameName = cfg.gameTitle || 'Nintendo 64 Online';
       window.EJS_gameUrl = cfg.romUrl || '/rom/mario_tennis.z64';
       window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
@@ -108,23 +120,12 @@
         cacheManager: false
       };
 
-      // Configuración anti-tilde para Parallel N64 y Mupen64Plus-Next:
-      // - Resolución nativa 320x240 para cero saturación de VRAM/WebGL
-      // - Framebuffer emulation y copias RDRAM desactivadas (evita el bloqueo en repeticiones de Mario Tennis)
+      // Opciones con resolución 640x480 completa (para que no se corte ni haga zoom la imagen)
+      // y parches anti-tilde de framebuffer desactivados
       window.EJS_defaultOptions = {
-        'parallel-n64-cpucore': 'dynamic_recompiler',
-        'parallel-n64-gfxplugin': 'glide64',
-        'parallel-n64-gfxplugin-accuracy': 'medium',
-        'parallel-n64-screensize': '320x240',
-        'parallel-n64-aspectratiohint': 'normal',
-        'parallel-n64-framerate': 'original',
-        'parallel-n64-pak1': 'memory',
-        'parallel-n64-pak2': 'none',
-        'parallel-n64-pak3': 'none',
-        'parallel-n64-pak4': 'none',
         'mupen64plus-cpucore': 'dynamic_recompiler',
         'mupen64plus-CountPerOp': '2',
-        'mupen64plus-43screensize': '320x240',
+        'mupen64plus-43screensize': '640x480',
         'mupen64plus-EnableFBEmulation': 'False',
         'mupen64plus-EnableCopyColorToRDRAM': 'Off',
         'mupen64plus-EnableCopyDepthToRDRAM': 'Off',
@@ -135,7 +136,15 @@
         'mupen64plus-pak1': 'memory',
         'mupen64plus-pak2': 'none',
         'mupen64plus-pak3': 'none',
-        'mupen64plus-pak4': 'none'
+        'mupen64plus-pak4': 'none',
+        'parallel-n64-cpucore': 'dynamic_recompiler',
+        'parallel-n64-gfxplugin': 'glide64',
+        'parallel-n64-screensize': '640x480',
+        'parallel-n64-aspectratiohint': 'normal',
+        'parallel-n64-pak1': 'memory',
+        'parallel-n64-pak2': 'none',
+        'parallel-n64-pak3': 'none',
+        'parallel-n64-pak4': 'none'
       };
 
       const script = document.createElement('script');

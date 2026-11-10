@@ -119,7 +119,7 @@ app.post('/api/upload-rom', (req, res) => {
         title: gameTitle,
         url: romUrl,
         filename: finalFilename,
-        core: room.currentGame?.core || 'parallel_n64'
+        core: room.currentGame?.core || 'n64'
       };
       io.to(roomId).emit('room-game-changed', {
         game: room.currentGame,
@@ -168,7 +168,7 @@ function serializeRoom(room) {
     currentGame: room.currentGame || {
       title: 'MARIO TENNIS 64',
       url: '/rom/mario_tennis.z64',
-      core: 'parallel_n64'
+      core: 'n64'
     },
     players: Array.from(room.players.values()).sort((a, b) => a.slot - b.slot)
   };
@@ -207,7 +207,7 @@ io.on('connection', (socket) => {
         currentGame: {
           title: defaultRom ? defaultRom.title : 'MARIO TENNIS 64',
           url: defaultRom ? defaultRom.url : '/rom/mario_tennis.z64',
-          core: 'parallel_n64'
+          core: 'n64'
         },
         players: new Map()
       };
@@ -296,13 +296,153 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Cambiar a un jugador de puerto (ej: pasar de 3P a 2P, o intercambiar lugares entre dos jugadores)
+  socket.on('change-player-slot', ({ roomId, targetSocketId, newSlot }, ack) => {
+    const room = rooms.get(roomId);
+    if (!room) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Sala no encontrada.' });
+      return;
+    }
+
+    const targetId = targetSocketId || socket.id;
+    const isRequesterHost = socket.id === room.hostSocketId;
+    const isSelf = socket.id === targetId;
+
+    // Solo el Host o el propio jugador pueden cambiar su número de mando
+    if (!isRequesterHost && !isSelf) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Solo el Host puede mover a otros jugadores.' });
+      return;
+    }
+
+    const targetPlayer = room.players.get(targetId);
+    const parsedSlot = Number(newSlot);
+    if (!targetPlayer || !Number.isInteger(parsedSlot) || parsedSlot < 1 || parsedSlot > 3) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Puerto inválido (elige 2P, 3P o 4P).' });
+      return;
+    }
+
+    // El Host siempre es 1P (slot 0) porque ejecuta el emulador
+    if (targetId === room.hostSocketId) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'El Host principal siempre ocupa 1P.' });
+      return;
+    }
+
+    const oldSlot = targetPlayer.slot;
+    if (oldSlot === parsedSlot) {
+      if (typeof ack === 'function') ack({ ok: true, slot: parsedSlot });
+      return;
+    }
+
+    // Buscar si ya hay otro jugador en el puerto destino (si lo hay, intercambiamos sus puertos)
+    let occupantPlayer = null;
+    for (const p of room.players.values()) {
+      if (p.slot === parsedSlot && p.socketId !== targetId) {
+        occupantPlayer = p;
+        break;
+      }
+    }
+
+    if (occupantPlayer) {
+      // Un invitado solo puede ocupar un puerto libre; el Host puede intercambiar a dos jugadores
+      if (!isRequesterHost) {
+        if (typeof ack === 'function') ack({ ok: false, error: `El lugar ${parsedSlot + 1}P ya está ocupado.` });
+        return;
+      }
+      occupantPlayer.slot = oldSlot;
+      targetPlayer.slot = parsedSlot;
+
+      io.to(roomId).emit('player-slot-changed', {
+        targetSocketId: targetPlayer.socketId,
+        oldSlot,
+        newSlot: parsedSlot,
+        swappedSocketId: occupantPlayer.socketId,
+        swappedNewSlot: oldSlot
+      });
+
+      io.to(roomId).emit('system-message', {
+        text: `🔄 Se intercambiaron los mandos: ${targetPlayer.name} ahora es ${parsedSlot + 1}P y ${occupantPlayer.name} es ${oldSlot + 1}P.`
+      });
+    } else {
+      targetPlayer.slot = parsedSlot;
+
+      io.to(roomId).emit('player-slot-changed', {
+        targetSocketId: targetPlayer.socketId,
+        oldSlot,
+        newSlot: parsedSlot,
+        swappedSocketId: null,
+        swappedNewSlot: null
+      });
+
+      io.to(roomId).emit('system-message', {
+        text: `🔄 ${targetPlayer.name} cambió de ${oldSlot + 1}P a ${parsedSlot + 1}P.`
+      });
+    }
+
+    io.to(roomId).emit('room-state', serializeRoom(room));
+    if (typeof ack === 'function') ack({ ok: true, slot: parsedSlot });
+  });
+
+  // Eliminar / Expulsar a un jugador de la sala (el Host puede eliminar a 2P, 3P o 4P)
+  socket.on('kick-player', ({ roomId, targetSocketId }, ack) => {
+    const room = rooms.get(roomId);
+    if (!room) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Sala no encontrada.' });
+      return;
+    }
+
+    const isRequesterHost = socket.id === room.hostSocketId;
+    const isSelf = socket.id === targetSocketId;
+
+    if (!isRequesterHost && !isSelf) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Solo el Host (1P) puede eliminar jugadores.' });
+      return;
+    }
+
+    if (targetSocketId === room.hostSocketId && !isSelf) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'No se puede eliminar al Host.' });
+      return;
+    }
+
+    const targetPlayer = room.players.get(targetSocketId);
+    if (!targetPlayer) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Jugador no encontrado.' });
+      return;
+    }
+
+    const removedSlot = targetPlayer.slot;
+    const removedName = targetPlayer.name;
+    room.players.delete(targetSocketId);
+
+    const targetSock = io.sockets.sockets.get(targetSocketId);
+    if (targetSock) {
+      targetSock.leave(roomId);
+      targetSock.emit('kicked-from-room', {
+        roomId,
+        reason: isSelf ? 'Saliste de la sala.' : 'El Host (1P) liberó tu lugar en la sala.'
+      });
+    }
+
+    io.to(roomId).emit('peer-left', {
+      peerSocketId: targetSocketId,
+      slot: removedSlot,
+      name: removedName
+    });
+
+    io.to(roomId).emit('system-message', {
+      text: `🚫 ${removedName} (${removedSlot + 1}P) fue eliminado de la sala. El puerto ${removedSlot + 1}P ahora está LIBRE.`
+    });
+
+    io.to(roomId).emit('room-state', serializeRoom(room));
+    if (typeof ack === 'function') ack({ ok: true });
+  });
+
   // Cambiar de juego o núcleo N64 dentro de la misma sala sin desconectar a los amigos
   socket.on('change-room-game', ({ roomId, title, url, core, isLocalBlob }) => {
     const room = rooms.get(roomId);
     if (!room) return;
     const player = room.players.get(socket.id);
     const cleanTitle = String(title || 'JUEGO N64').trim().substring(0, 40).toUpperCase();
-    const cleanCore = core === 'n64' ? 'n64' : 'parallel_n64';
+    const cleanCore = core === 'parallel_n64' ? 'parallel_n64' : 'n64';
 
     room.currentGame = {
       title: cleanTitle,

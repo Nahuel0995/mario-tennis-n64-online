@@ -519,7 +519,7 @@
   let canvasWatcherId = null;
   let activeRomUrl = '/rom/mario_tennis.z64';
   let activeGameTitle = 'MARIO TENNIS 64';
-  let activeCore = localStorage.getItem('n64_preferred_core') || 'parallel_n64';
+  let activeCore = localStorage.getItem('n64_preferred_core_v2') || 'n64';
   let availableServerRoms = [];
 
   const coreSelectEl = document.getElementById('emulator-core-select');
@@ -582,7 +582,7 @@
     if (emulatorStarted && !forceReload) return;
 
     activeRomUrl = romUrl || '/rom/mario_tennis.z64';
-    activeCore = core || 'parallel_n64';
+    activeCore = core || 'n64';
     updateGameTitleUI(gameTitle);
 
     if (! activeRomUrl.startsWith('blob:')) {
@@ -686,7 +686,7 @@
   function switchGameInRoom({ romUrl, title, core = activeCore, isLocalBlob = false }) {
     activeCore = core;
     if (coreSelectEl) coreSelectEl.value = activeCore;
-    localStorage.setItem('n64_preferred_core', activeCore);
+    localStorage.setItem('n64_preferred_core_v2', activeCore);
 
     if (isHost) {
       bootHostEmulator(romUrl, title, activeCore, true);
@@ -800,14 +800,14 @@
     });
   }
 
-  // Selector de motor N64 (Parallel N64 vs Mupen64Plus-Next) y botón de Reinicio rápido
+  // Selector de motor N64 (Mupen64Plus-Next vs Parallel N64) y botón de Reinicio rápido
   if (coreSelectEl) {
     coreSelectEl.addEventListener('change', () => {
       activeCore = coreSelectEl.value;
-      localStorage.setItem('n64_preferred_core', activeCore);
+      localStorage.setItem('n64_preferred_core_v2', activeCore);
       if (isHost && emulatorStarted) {
         bootHostEmulator(activeRomUrl, activeGameTitle, activeCore, true);
-        appendChatLine('system', `⚙️ Motor N64 cambiado a: ${activeCore === 'parallel_n64' ? 'Parallel N64 (Anti-Tilde)' : 'Mupen64Plus-Next'}.`);
+        appendChatLine('system', `⚙️ Motor N64 cambiado a: ${activeCore === 'n64' ? 'Mupen64Plus-Next (Original 4:3)' : 'Parallel N64'}.`);
       }
     });
   }
@@ -824,7 +824,7 @@
   });
 
   // ==========================================================================
-  // 7. RED MULTIJUGADOR (SOCKET.IO + WEBRTC P2P)
+  // 7. RED MULTIJUGADOR (SOCKET.IO + WEBRTC P2P + GESTIÓN DE PUERTOS 1P-4P)
   // ==========================================================================
   const socket = window.io({
     reconnection: true,
@@ -835,6 +835,30 @@
   let mySlot = 0;
   let isHost = false;
   let myPingMs = 12;
+  let latestRoomState = null;
+
+  function requestChangePlayerSlot(targetSocketId, newSlot) {
+    socket.emit('change-player-slot', {
+      roomId: currentRoomId,
+      targetSocketId,
+      newSlot: Number(newSlot)
+    }, (res) => {
+      if (res && !res.ok && res.error) {
+        appendChatLine('system', `⚠️ ${res.error}`);
+      }
+    });
+  }
+
+  function requestKickPlayer(targetSocketId, playerName) {
+    socket.emit('kick-player', {
+      roomId: currentRoomId,
+      targetSocketId
+    }, (res) => {
+      if (res && !res.ok && res.error) {
+        appendChatLine('system', `⚠️ ${res.error}`);
+      }
+    });
+  }
 
   fetch('/api/rom-status')
     .then((r) => r.json())
@@ -889,7 +913,7 @@
       } else {
         document.getElementById('emulator-container').classList.add('hidden');
         document.getElementById('guest-stage').classList.remove('hidden');
-        appendChatLine('system', `✅ Conectado como ${mySlot + 1}P. Puedes configurar tus teclas arriba en "⚙️ Configurar Teclas".`);
+        appendChatLine('system', `✅ Conectado como ${mySlot + 1}P. Puedes cambiar a 2P/3P/4P desde la lista derecha.`);
       }
     });
   });
@@ -903,10 +927,62 @@
   }, 4000);
 
   socket.on('room-state', (room) => {
+    latestRoomState = room;
     if (room?.currentGame?.title) {
       updateGameTitleUI(room.currentGame.title);
     }
+    if (Array.isArray(room?.players)) {
+      const me = room.players.find((p) => p.socketId === socket.id);
+      if (me && typeof me.slot === 'number') {
+        mySlot = me.slot;
+        const badge = document.getElementById('guest-stream-badge');
+        if (badge && !isHost) {
+          badge.textContent = `🟢 En Vivo (${mySlot + 1}P) • ${activeGameTitle}`;
+        }
+      }
+      // Sincronizar los números de puerto en las conexiones WebRTC del Host
+      if (isHost) {
+        room.players.forEach((p) => {
+          const peer = peers.get(p.socketId);
+          if (peer) peer.slot = p.slot;
+        });
+      }
+    }
     renderConnectedPlayersSidebar(room);
+  });
+
+  socket.on('player-slot-changed', ({ targetSocketId, oldSlot, newSlot, swappedSocketId, swappedNewSlot }) => {
+    if (isHost) {
+      if (typeof oldSlot === 'number') {
+        injectInputIntoEmulatorJS(oldSlot, { bitmask: 0, stickX: 0, stickY: 0 });
+      }
+      if (typeof newSlot === 'number') {
+        injectInputIntoEmulatorJS(newSlot, { bitmask: 0, stickX: 0, stickY: 0 });
+      }
+      const p1 = peers.get(targetSocketId);
+      if (p1 && typeof newSlot === 'number') p1.slot = newSlot;
+      if (swappedSocketId) {
+        const p2 = peers.get(swappedSocketId);
+        if (p2 && typeof swappedNewSlot === 'number') p2.slot = swappedNewSlot;
+      }
+    }
+    if (socket.id === targetSocketId && typeof newSlot === 'number') {
+      mySlot = newSlot;
+    } else if (socket.id === swappedSocketId && typeof swappedNewSlot === 'number') {
+      mySlot = swappedNewSlot;
+    }
+  });
+
+  socket.on('kicked-from-room', ({ reason }) => {
+    for (const peer of peers.values()) {
+      peer.pc.close();
+    }
+    peers.clear();
+    const guestVideo = document.getElementById('guest-video-stream');
+    if (guestVideo) guestVideo.srcObject = null;
+    const badge = document.getElementById('guest-stream-badge');
+    if (badge) badge.textContent = `🚫 ${reason || 'Fuiste eliminado de la sala.'}`;
+    appendChatLine('system', `🚫 ${reason || 'Fuiste eliminado de la sala.'}`);
   });
 
   socket.on('room-game-metadata', ({ title, url, core, changedBySocketId }) => {
@@ -1032,7 +1108,9 @@
 
     dc.onmessage = (e) => {
       const decoded = decodeControllerPacket(e.data);
-      injectInputIntoEmulatorJS(slot, decoded);
+      const currentPeer = peers.get(guestSocketId);
+      const activeSlot = currentPeer ? currentPeer.slot : slot;
+      injectInputIntoEmulatorJS(activeSlot, decoded);
     };
 
     pc.onicecandidate = (e) => {
@@ -1174,7 +1252,7 @@
   requestAnimationFrame(updateInputsLoop);
 
   // ==========================================================================
-  // 8. PANEL LATERAL DE PERSONAS CONECTADAS, NOMBRES Y CHAT
+  // 8. PANEL LATERAL DE PERSONAS CONECTADAS, CAMBIO DE PUERTO (3P->2P) Y ELIMINAR
   // ==========================================================================
   function renderConnectedPlayersSidebar(room) {
     if (!room || !Array.isArray(room.players)) return;
@@ -1208,23 +1286,70 @@
       if (player) {
         const roleTag = s === 0 ? '👑 Host' : 'Invitado';
         const youTag = s === mySlot ? ' (Tú)' : '';
+        const canManageSlot = s > 0 && (isHost || player.socketId === socket.id);
+
         card.innerHTML = `
           <div class="slot-badge p${s + 1}">${s + 1}P</div>
           <div class="player-card-info">
             <div class="player-card-name">${escapeHtml(player.name)}${youTag}</div>
             <div class="player-card-meta">${roleTag} • ${escapeHtml(player.controllerType || 'Teclado')}</div>
           </div>
-          <span class="player-ping-tag">${player.ping || 12} ms</span>
+          <div class="player-card-actions">
+            <span class="player-ping-tag">${player.ping || 12} ms</span>
+            ${canManageSlot ? `
+              <select class="slot-switch-select" title="Cambiar número de Jugador (2P, 3P, 4P)">
+                <option value="1" ${s === 1 ? 'selected' : ''}>2P</option>
+                <option value="2" ${s === 2 ? 'selected' : ''}>3P</option>
+                <option value="3" ${s === 3 ? 'selected' : ''}>4P</option>
+              </select>
+              <button type="button" class="btn-kick-player" title="${isHost ? 'Eliminar jugador de la sala' : 'Salir de la sala'}">✕</button>
+            ` : ''}
+          </div>
         `;
+
+        if (canManageSlot) {
+          const selectEl = card.querySelector('.slot-switch-select');
+          if (selectEl) {
+            selectEl.addEventListener('change', (e) => {
+              requestChangePlayerSlot(player.socketId, Number(e.target.value));
+            });
+          }
+          const kickBtn = card.querySelector('.btn-kick-player');
+          if (kickBtn) {
+            kickBtn.addEventListener('click', () => {
+              requestKickPlayer(player.socketId, player.name);
+            });
+          }
+        }
       } else {
+        // Si el lugar está LIBRE (ej: 2P está libre y hay alguien en 3P o 4P)
+        const otherGuest = isHost
+          ? room.players.find((p) => p.slot > 0 && p.slot !== s)
+          : (!isHost && mySlot > 0 ? room.players.find((p) => p.socketId === socket.id) : null);
+
         card.innerHTML = `
           <div class="slot-badge p${s + 1}">${s + 1}P</div>
           <div class="player-card-info">
             <div class="player-card-name">Esperando amigo...</div>
-            <div class="player-card-meta">Comparte el link para conectar ${s + 1}P</div>
+            <div class="player-card-meta">Puerto ${s + 1}P disponible</div>
           </div>
-          <span class="player-ping-tag">LIBRE</span>
+          <div class="player-card-actions">
+            ${otherGuest ? `
+              <button type="button" class="btn-take-slot" title="Mover a ${escapeHtml(otherGuest.name)} al lugar ${s + 1}P">
+                🔄 Pasar a ${s + 1}P
+              </button>
+            ` : `<span class="player-ping-tag">LIBRE</span>`}
+          </div>
         `;
+
+        if (otherGuest) {
+          const takeBtn = card.querySelector('.btn-take-slot');
+          if (takeBtn) {
+            takeBtn.addEventListener('click', () => {
+              requestChangePlayerSlot(otherGuest.socketId, s);
+            });
+          }
+        }
       }
 
       listContainer.appendChild(card);

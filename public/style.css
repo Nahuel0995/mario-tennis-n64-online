@@ -967,3 +967,67 @@ body {
   cursor: pointer;
   white-space: nowrap;
 }
+
+/* ==========================================================================
+   BOTONES PARA CAMBIAR DE JUGADOR (3P -> 2P) Y ELIMINAR JUGADORES
+   ========================================================================== */
+.player-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.slot-switch-select {
+  background: #0b1120;
+  color: #facc15;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  padding: 3px 5px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.slot-switch-select:hover {
+  border-color: var(--accent-gold);
+}
+
+.btn-kick-player {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.btn-kick-player:hover {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.btn-take-slot {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+}
+
+.btn-take-slot:hover {
+  background: #3b82f6;
+  color: #ffffff;
+}
